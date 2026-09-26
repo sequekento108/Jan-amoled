@@ -1,0 +1,8 @@
+#!/bin/bash
+# Jan AMOLED launcher: re-applies the pure-black patch if the binary was
+# replaced (e.g. by an update) and we can write to it, then starts Jan.
+PATCH=/usr/lib/jan-amoled/jan-amoled-patch.py
+if [ -w /usr/bin/Jan ] && [ -f "$PATCH" ]; then
+  python3 "$PATCH" /usr/bin/Jan >/dev/null 2>&1
+fi
+exec /usr/bin/Jan "$@"
