@@ -2,4 +2,5 @@ Package: jan-amoled
 Version: 1.0
 Architecture: all
 Maintainer: cg
+Depends: jan
 Description: Patches jan.ai with an AMOLED theme
