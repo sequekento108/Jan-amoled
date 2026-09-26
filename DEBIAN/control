@@ -2,5 +2,5 @@ Package: jan-amoled
 Version: 1.3
 Architecture: all
 Maintainer: cg
-Depends: jan
-Description: Patches jan.ai with an AMOLED theme (optional noCSD mode)
+Depends: jan, python3
+Description: Ui patcher for Jan.ai
