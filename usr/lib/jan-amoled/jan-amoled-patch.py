@@ -5,16 +5,17 @@ same-length byte replacements of the embedded minified CSS).
 Optional noCSD mode hides Jan's built-in minimize/maximize/close buttons
 (the titlebar layout JS is forced to empty left/right arrays, same-length).
 
-Usage: jan-amoled-patch.py [path-to-Jan-binary] [--mode amoled|nocsd|unpatch]
+Usage: jan-amoled-patch.py [path-to-Jan-binary] [--mode amoled|nocsd|nocsd-only|unpatch]
                           [--no-prompt]
 Default binary: ~/.local/bin/Jan
 
 - Interactive (TTY) with no --mode: a terminal menu asks on each run:
     1) AMOLED only
     2) AMOLED + noCSD (hide minimize/maximize/close)
-    3) Unpatch (restore original from backup)
+    3) noCSD only (without AMOLED)
+    4) Unpatch (restore original from backup)
 - Non-interactive (pipe/launcher) with no --mode, or with --no-prompt:
-  the existing noCSD state found in the binary is preserved.
+  the existing mode found in the binary is preserved.
   (--no-prompt is what the Jan-amoled launcher uses so GUI starts never block.)
 
 Re-run after every Jan update (the updater replaces the binary).
@@ -77,6 +78,7 @@ assert len(NOCSD_A_OLD) == len(NOCSD_A_NEW), \
 
 MODE_AMOLED = "amoled"
 MODE_NOCSD = "nocsd"  # means AMOLED + noCSD
+MODE_NOCSD_ONLY = "nocsd-only"  # means noCSD without AMOLED
 MODE_UNPATCH = "unpatch"  # restore original binary from backup
 MODE_STOCK = "stock"  # current-state label: neither AMOLED nor noCSD applied
 
@@ -87,13 +89,16 @@ def parse_args(argv=None):
                     "the built-in window buttons (noCSD).")
     p.add_argument("binary", nargs="?", default=DEFAULT_BIN,
                    help="path to Jan binary (default: %(default)s)")
-    p.add_argument("--mode", choices=[MODE_AMOLED, MODE_NOCSD, MODE_UNPATCH,
-                                      "amoled-only", "amoled-nocsd",
-                                      "no-csd", "nocsd",
-                                      "restore", "stock"],
+    p.add_argument("--mode", choices=[MODE_AMOLED, MODE_NOCSD,
+                                       MODE_NOCSD_ONLY, MODE_UNPATCH,
+                                       "amoled-only", "amoled-nocsd",
+                                       "no-csd",
+                                       "only-nocsd", "no-csd-only",
+                                       "restore", "stock"],
                    default=None,
                    help="'amoled' = AMOLED only, 'nocsd' = AMOLED + noCSD"
-                        "(hide minimize/maximize/close), 'unpatch' = restore "
+                        "(hide minimize/maximize/close), 'nocsd-only' = "
+                        "noCSD only (without AMOLED), 'unpatch' = restore "
                         "the original binary from backup. Without --mode, "
                         "an interactive terminal menu asks on each run.")
     p.add_argument("--unpatch", action="store_true",
@@ -101,7 +106,7 @@ def parse_args(argv=None):
                         "(same as --mode unpatch).")
     p.add_argument("--no-prompt", action="store_true",
                    help="never prompt; preserve the binary's existing "
-                        "noCSD state (used by the launcher).")
+                        "mode (used by the launcher).")
     return p.parse_args(argv)
 
 
@@ -111,6 +116,8 @@ def normalise_mode(raw):
     m = raw.lower().replace("_", "-")
     if m in ("amoled", "amoled-only"):
         return MODE_AMOLED
+    if m in ("nocsd-only", "only-nocsd", "no-csd-only"):
+        return MODE_NOCSD_ONLY
     if m in ("unpatch", "restore", "stock"):
         return MODE_UNPATCH
     return MODE_NOCSD
@@ -126,15 +133,17 @@ def is_nocsd(data: bytes) -> bool:
 
 
 def ask_mode_fallback(current: str) -> str:
-    keep = current if current in (MODE_AMOLED, MODE_NOCSD) else MODE_UNPATCH
+    keep = current if current in (MODE_AMOLED, MODE_NOCSD,
+                                  MODE_NOCSD_ONLY) else MODE_UNPATCH
     print("Jan AMOLED patcher")
     print(f"Current: {describe(current)}")
     print("  1) AMOLED only")
     print("  2) AMOLED + noCSD")
-    print("  3) Unpatch")
+    print("  3) noCSD only (without AMOLED)")
+    print("  4) Unpatch")
     try:
         choice = input(
-            f"Select [1/2/3] (Enter keeps current: {current_label(current)}): "
+            f"Select [1/2/3/4] (Enter keeps current: {current_label(current)}): "
         ).strip()
     except (EOFError, KeyboardInterrupt):
         print()
@@ -145,6 +154,8 @@ def ask_mode_fallback(current: str) -> str:
     if choice == "2":
         return MODE_NOCSD
     if choice == "3":
+        return MODE_NOCSD_ONLY
+    if choice == "4":
         return MODE_UNPATCH
     if choice == "":
         return keep
@@ -157,10 +168,19 @@ def ask_mode_curses(current: str) -> str:
     options = [
         (MODE_AMOLED, "AMOLED only"),
         (MODE_NOCSD, "AMOLED + noCSD"),
+        (MODE_NOCSD_ONLY, "noCSD only (without AMOLED)"),
         (MODE_UNPATCH, "Unpatch"),
     ]
-    keep = current if current in (MODE_AMOLED, MODE_NOCSD) else MODE_UNPATCH
-    sel = 1 if current == MODE_NOCSD else 0
+    keep = current if current in (MODE_AMOLED, MODE_NOCSD,
+                                  MODE_NOCSD_ONLY) else MODE_UNPATCH
+    if current == MODE_NOCSD:
+        sel = 1
+    elif current == MODE_NOCSD_ONLY:
+        sel = 2
+    elif current in (MODE_UNPATCH, MODE_STOCK):
+        sel = 3
+    else:
+        sel = 0
     result = {"mode": keep}
 
     def run(stdscr):
@@ -169,7 +189,7 @@ def ask_mode_curses(current: str) -> str:
         while True:
             stdscr.clear()
             stdscr.addstr(0, 0, "Jan AMOLED patcher  (Up/Down + Enter, "
-                               "1/2/3 shortcut, q to keep current)")
+                               "1/2/3/4 shortcut, q to keep current)")
             stdscr.addstr(2, 0, f"Current: {describe(current)}")
             for i, (_, label) in enumerate(options):
                 marker = "> " if i == sel else "  "
@@ -191,6 +211,9 @@ def ask_mode_curses(current: str) -> str:
                 result["mode"] = MODE_NOCSD
                 return
             elif key == ord('3'):
+                result["mode"] = MODE_NOCSD_ONLY
+                return
+            elif key == ord('4'):
                 result["mode"] = MODE_UNPATCH
                 return
             elif key in (ord('q'), 27):
@@ -216,14 +239,18 @@ def ask_mode(current: str) -> str:
 def current_label(mode: str) -> str:
     if mode == MODE_NOCSD:
         return "2"
-    if mode in (MODE_UNPATCH, MODE_STOCK):
+    if mode == MODE_NOCSD_ONLY:
         return "3"
+    if mode in (MODE_UNPATCH, MODE_STOCK):
+        return "4"
     return "1"
 
 
 def describe(mode: str) -> str:
     if mode == MODE_NOCSD:
         return "AMOLED + noCSD"
+    if mode == MODE_NOCSD_ONLY:
+        return "noCSD only (without AMOLED)"
     if mode == MODE_UNPATCH:
         return "unpatch"
     if mode == MODE_STOCK:
@@ -293,10 +320,12 @@ def main(argv=None) -> None:
 
     have_amoled = is_amoled(data, span)
     have_nocsd = is_nocsd(data)
-    if have_nocsd:
+    if have_amoled and have_nocsd:
         current = MODE_NOCSD
     elif have_amoled:
         current = MODE_AMOLED
+    elif have_nocsd:
+        current = MODE_NOCSD_ONLY
     else:
         current = MODE_STOCK
 
@@ -314,7 +343,8 @@ def main(argv=None) -> None:
         do_unpatch(bin_path, data, bak, have_amoled, have_nocsd, span)
         return
 
-    want_nocsd = (requested == MODE_NOCSD)
+    want_amoled = requested in (MODE_AMOLED, MODE_NOCSD)
+    want_nocsd = requested in (MODE_NOCSD, MODE_NOCSD_ONLY)
 
     # Backup once, before any modification.
     if not os.path.exists(bak):
@@ -324,15 +354,18 @@ def main(argv=None) -> None:
 
     changed = []
 
-    if not have_amoled:
+    if want_amoled and not have_amoled:
         for old_s, new_s in PROP_REPLACEMENTS:
             old_b, new_b = old_s.encode(), new_s.encode()
             replace_once(data, old_b, new_b, span[0], span[1])
         replace_once(data, LOADER_OLD, LOADER_NEW)  # unique file-wide
         changed.append("AMOLED")
-    else:
-        # Sanity: AMOLED marker implies the loader was patched too.
-        pass
+    elif not want_amoled and have_amoled:
+        for old_s, new_s in PROP_REPLACEMENTS:
+            old_b, new_b = old_s.encode(), new_s.encode()
+            replace_once(data, new_b, old_b, span[0], span[1])
+        replace_once(data, LOADER_NEW, LOADER_OLD)  # unique file-wide
+        changed.append("AMOLED reverted")
 
     if want_nocsd and not have_nocsd:
         replace_once(data, NOCSD_GV_OLD, NOCSD_GV_NEW)
