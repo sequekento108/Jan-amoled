@@ -5,5 +5,5 @@ Exec=/usr/bin/Jan-amoled
 StartupWMClass=Jan
 Icon=zenity
 Name=Jan Amoled UI Patcher
-Terminal=false
+Terminal=true
 Type=Application
