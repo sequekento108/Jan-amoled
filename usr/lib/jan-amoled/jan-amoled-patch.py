@@ -7,7 +7,7 @@ Optional noCSD mode hides Jan's built-in minimize/maximize/close buttons
 
 Usage: jan-amoled-patch.py [path-to-Jan-binary] [--mode amoled|nocsd|nocsd-only|unpatch]
                           [--no-prompt]
-Default binary: ~/.local/bin/Jan
+Default binary: discovered with `which Jan` (or provide an explicit path).
 
 - Interactive (TTY) with no --mode: a terminal menu asks on each run:
     1) AMOLED only
@@ -24,8 +24,41 @@ A backup is written to <binary>.bak-0.8.4 on first run (kept as-is after).
 import argparse
 import os
 import sys
+import shutil
+import subprocess
 
-DEFAULT_BIN = os.path.expanduser("~/.local/bin/Jan")
+
+def discover_binary():
+    """Find Jan on the invoking user's PATH, like `which Jan`."""
+    path = shutil.which("Jan")
+    if not path:
+        raise SystemExit("Jan not found on PATH (`which Jan` returned nothing). "
+                         "Supply the binary path explicitly.")
+    return os.path.abspath(path)
+
+
+def sudo_retry(args, mode=None):
+    """Request sudo on the controlling TTY, preserving interactive stdin/out/err."""
+    if os.geteuid() == 0:
+        raise SystemExit("Cannot access Jan even as root; check the path and permissions.")
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise SystemExit("Jan requires elevated permissions. Re-run in an interactive "
+                         "terminal to authorize sudo (no TTY available).")
+    sudo = shutil.which("sudo")
+    if not sudo:
+        raise SystemExit("Jan requires elevated permissions, but sudo is unavailable.")
+    cmd = [sudo, sys.executable, os.path.abspath(__file__), args.binary]
+    if mode is not None:
+        cmd += ["--mode", mode]
+    elif args.unpatch:
+        cmd += ["--unpatch"]
+    elif args.mode:
+        cmd += ["--mode", args.mode]
+    if args.no_prompt:
+        cmd.append("--no-prompt")
+    print("Jan is inaccessible without elevated permissions; requesting sudo "
+          "in this terminal.", flush=True)
+    raise SystemExit(subprocess.call(cmd))
 
 
 def pad(value: str, length: int) -> str:
@@ -87,8 +120,8 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description="Patch Jan with an AMOLED theme, optionally hiding "
                     "the built-in window buttons (noCSD).")
-    p.add_argument("binary", nargs="?", default=DEFAULT_BIN,
-                   help="path to Jan binary (default: %(default)s)")
+    p.add_argument("binary", nargs="?", default=None,
+                   help="path to Jan binary (default: discover using which Jan)")
     p.add_argument("--mode", choices=[MODE_AMOLED, MODE_NOCSD,
                                        MODE_NOCSD_ONLY, MODE_UNPATCH,
                                        "amoled-only", "amoled-nocsd",
@@ -304,13 +337,18 @@ def replace_once(buf: bytearray, old: bytes, new: bytes,
 
 def main(argv=None) -> None:
     args = parse_args(argv)
-    bin_path = args.binary
+    # Resolve before sudo so root does not accidentally search a different PATH.
+    bin_path = os.path.abspath(args.binary or discover_binary())
+    args.binary = bin_path
     requested = normalise_mode(args.mode)
     if args.unpatch:
         requested = MODE_UNPATCH
 
-    with open(bin_path, "rb") as f:
-        data = bytearray(f.read())
+    try:
+        with open(bin_path, "rb") as f:
+            data = bytearray(f.read())
+    except PermissionError:
+        sudo_retry(args, requested)
 
     start = data.find(b".dark{--background")
     assert start != -1, "dark CSS block not found"
@@ -340,11 +378,26 @@ def main(argv=None) -> None:
             requested = ask_mode(current)
 
     if requested == MODE_UNPATCH:
+        if (have_amoled or have_nocsd) and (
+                not os.access(bin_path, os.W_OK) or
+                (not os.path.exists(bak) and
+                 not os.access(os.path.dirname(bin_path), os.W_OK))):
+            sudo_retry(args, requested)
         do_unpatch(bin_path, data, bak, have_amoled, have_nocsd, span)
         return
 
     want_amoled = requested in (MODE_AMOLED, MODE_NOCSD)
     want_nocsd = requested in (MODE_NOCSD, MODE_NOCSD_ONLY)
+
+    # Escalate only when a change needs writing. Keep the chosen menu mode
+    # and inherit the terminal so sudo can ask for the password normally.
+    needs_change = (want_amoled != have_amoled or want_nocsd != have_nocsd or
+                    not os.path.exists(bak))
+    if needs_change and (
+            not os.access(bin_path, os.W_OK) or
+            (not os.path.exists(bak) and
+             not os.access(os.path.dirname(bin_path), os.W_OK))):
+        sudo_retry(args, requested)
 
     # Backup once, before any modification.
     if not os.path.exists(bak):
