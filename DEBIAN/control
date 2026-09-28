@@ -1,5 +1,5 @@
 Package: jan-amoled
-Version: 1.4
+Version: 1.6
 Architecture: all
 Maintainer: cg
 Depends: jan, python3
